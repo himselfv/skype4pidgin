@@ -1218,6 +1218,8 @@ skypeweb_get_batch_profile_cb(SkypeWebAccount *sa, JsonNode *node, gpointer user
 	//Avatar URL will point to public version for public profiles
 	_SKYPEWEB_SET_INFO(avatarUrl, "avatarUrl");
 
+#undef _SKYPEWEB_SET_INFO
+
 	//Note: Do not look for this contact in our buddy list here.
 	//  This function is only for querying public info for external contacts.
 	
@@ -1253,7 +1255,14 @@ skypeweb_get_batch_profile(SkypeWebAccount *sa, const gchar *username, skypeweb_
 
 
 /*
-skypeweb_get_friend_list:
+skypeweb_get_friend_list():
+Queries or updates the friend list and user information for all friends. Called once at connection
+and then at any time that updating of the friend information is requested.
+
+Returns etag. If we properly pass it back as IfNoneMatch, the subsequent requests will only return
+the fields that changed.
+But we still have to be ready to handle any set of changes.
+
 GET https://contacts.skype.com/contacts/v2/users/[username]
   Retrieves extensive information about all users in the current contact's friend list.
   Returns etag and can return 304 not-modified if you pass etag back under IfNoneMatch header.
@@ -1263,6 +1272,13 @@ GET https://contacts.skype.com/contacts/v2/users/[username]?delta&reason=default
 
 The only one of the contact queries currently that correctly returns non-public fields such as mood.
 */
+static inline void
+g_strupdate(gchar** str, gchar* newStr)
+{
+	if (*str)
+		g_free(*str);
+	*str = newStr;
+}
 
 static void
 skypeweb_get_friend_list_cb(SkypeWebAccount *sa, JsonNode *node, gpointer user_data)
@@ -1321,21 +1337,35 @@ skypeweb_get_friend_list_cb(SkypeWebAccount *sa, JsonNode *node, gpointer user_d
 		if (name && json_object_has_member(name, "surname"))
 			surname = json_object_get_string_member(name, "surname");
 
-		// try to free the sbuddy here. no-op if it's not set before, otherwise prevents a leak.
-		skypeweb_buddy_free(buddy);
-		
-		SkypeWebBuddy *sbuddy = g_new0(SkypeWebBuddy, 1);
-		sbuddy->skypename = g_strdup(id);
-		sbuddy->sa = sa;
-		sbuddy->fullname = g_strconcat(firstname, (surname ? " " : NULL), surname, NULL);
-		sbuddy->display_name = g_strdup(display_name);
+
+		SkypeWebBuddy *sbuddy = purple_buddy_get_protocol_data(buddy);
+		bool sbuddy_new = !sbuddy;
+		if (sbuddy_new) {
+			SkypeWebBuddy *sbuddy = g_new0(SkypeWebBuddy, 1);
+			sbuddy->skypename = g_strdup(id);
+			sbuddy->sa = sa;
+		} else {
+			//Otherwise don't change these fields: we've located the buddy by them so they must still match.
+		}
+
+#define _SKYPEWEB_SET_INFO(MEMBER, PROP) \
+	if (PROP && json_object_has_member(userobj, (PROP)) && !json_object_get_null_member(userobj, (PROP))) \
+	  profileInfo.MEMBER = g_strdup(json_object_get_string_member(userobj, (PROP))); \
+	else profileInfo.MEMBER = NULL;
+
+
+		g_strupdate(&sbuddy->fullname, g_strconcat(firstname, (surname ? " " : NULL), surname, NULL));
+		g_strupdate(&sbuddy->display_name, g_strdup(display_name));
+		g_strupdate(&sbuddy->avatar_url, g_strdup(purple_buddy_icons_get_checksum_for_user(buddy)));
+		g_strupdate(&sbuddy->mood, g_strdup(mood));
 		sbuddy->authorized = authorized;
 		sbuddy->blocked = blocked;
-		sbuddy->avatar_url = g_strdup(purple_buddy_icons_get_checksum_for_user(buddy));
-		sbuddy->mood = g_strdup(mood);
 		
-		sbuddy->buddy = buddy;
-		purple_buddy_set_protocol_data(buddy, sbuddy);
+		if (sbuddy_new) {
+			sbuddy->buddy = buddy;
+			purple_buddy_set_protocol_data(buddy, sbuddy);
+		}
+		
 		
 		if (!purple_strequal(purple_buddy_get_local_alias(buddy), sbuddy->display_name)) {
 			purple_serv_got_alias(sa->pc, id, sbuddy->display_name);
