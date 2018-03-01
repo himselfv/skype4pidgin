@@ -1029,7 +1029,15 @@ skypeweb_search_users(PurpleProtocolAction *action)
 }
 
 
+/*
+skypeweb_get_friend_profiles:
+POST https://api.skype.com/users/self/contacts/profiles
 
+Retrieves public info for any user, not just a contact
+Body:
+  {"contacts" ["username", "username", ...]}
+Private fields such as mood are always null. Avatars link to public versions.
+*/
 
 static void
 skypeweb_got_friend_profiles(SkypeWebAccount *sa, JsonNode *node, gpointer user_data)
@@ -1106,112 +1114,6 @@ skypeweb_get_friend_profiles(SkypeWebAccount *sa, GSList *contacts)
 	g_string_free(postdata, TRUE);
 }
 
-
-static void
-skypeweb_got_info(SkypeWebAccount *sa, JsonNode *node, gpointer user_data)
-{
-	gchar *username = user_data;
-	PurpleNotifyUserInfo *user_info;
-	JsonObject *userobj;
-	PurpleBuddy *buddy;
-	SkypeWebBuddy *sbuddy;
-	
-	if (node == NULL)
-		return;
-	if (json_node_get_node_type(node) == JSON_NODE_ARRAY)
-		node = json_array_get_element(json_node_get_array(node), 0);
-	if (json_node_get_node_type(node) != JSON_NODE_OBJECT)
-		return;
-	userobj = json_node_get_object(node);
-	
-	user_info = purple_notify_user_info_new();
-	
-#define _SKYPE_USER_INFO(prop, key) if (prop && json_object_has_member(userobj, (prop)) && !json_object_get_null_member(userobj, (prop))) \
-	purple_notify_user_info_add_pair_html(user_info, _(key), json_object_get_string_member(userobj, (prop)));
-	
-	_SKYPE_USER_INFO("firstname", "First Name");
-	_SKYPE_USER_INFO("lastname", "Last Name");
-	_SKYPE_USER_INFO("birthday", "Birthday");
-	//_SKYPE_USER_INFO("gender", "Gender");
-	if (json_object_has_member(userobj, "gender") && !json_object_get_null_member(userobj, "gender")) {
-		const gchar *gender_output = _("Unknown");
-		
-		// Can be presented as either a string of a number or as a number argh
-		if (json_node_get_value_type(json_object_get_member(userobj, "gender")) == G_TYPE_STRING) {
-			const gchar *gender = json_object_get_string_member(userobj, "gender");
-			if (gender && *gender == '1') {
-				gender_output = _("Male");
-			} else if (gender && *gender == '2') {
-				gender_output = _("Female");
-			}
-		} else {
-			gint64 gender = json_object_get_int_member(userobj, "gender");
-			if (gender == 1) {
-				gender_output = _("Male");
-			} else if (gender == 2) {
-				gender_output = _("Female");
-			}
-		}
-		
-		purple_notify_user_info_add_pair_html(user_info, _("Gender"), gender_output);
-	}
-	_SKYPE_USER_INFO("language", "Language");
-	_SKYPE_USER_INFO("country", "Country");
-	_SKYPE_USER_INFO("province", "Province");
-	_SKYPE_USER_INFO("city", "City");
-	_SKYPE_USER_INFO("homepage", "Homepage");
-	_SKYPE_USER_INFO("about", "About");
-	_SKYPE_USER_INFO("jobtitle", "Job Title");
-	_SKYPE_USER_INFO("phoneMobile", "Phone - Mobile");
-	_SKYPE_USER_INFO("phoneHome", "Phone - Home");
-	_SKYPE_USER_INFO("phoneOffice", "Phone - Office");
-	//_SKYPE_USER_INFO("mood", "Mood");
-	//_SKYPE_USER_INFO("richMood", "Mood");
-	//_SKYPE_USER_INFO("avatarUrl", "Avatar");
-	
-	buddy = purple_blist_find_buddy(sa->account, username);
-	if (buddy) {
-		sbuddy = purple_buddy_get_protocol_data(buddy);
-		if (sbuddy == NULL) {
-			sbuddy = g_new0(SkypeWebBuddy, 1);
-			purple_buddy_set_protocol_data(buddy, sbuddy);
-			sbuddy->skypename = g_strdup(username);
-			sbuddy->sa = sa;
-		}
-		
-		//At the moment, "mood" field is present but always null via this call. Do not clear it.
-		if (json_object_has_member(userobj, ("mood")) && !json_object_get_null_member(userobj, ("mood")))) {
-			g_free(sbuddy->mood); sbuddy->mood = g_strdup(json_object_get_string_member(userobj, "mood"));
-		}
-	}
-	
-	purple_notify_userinfo(sa->pc, username, user_info, NULL, NULL);
-	
-	g_free(username);
-}
-
-void
-skypeweb_get_info(PurpleConnection *pc, const gchar *username)
-{
-	SkypeWebAccount *sa = purple_connection_get_protocol_data(pc);
-	gchar *post;
-	const gchar *url = "/users/batch/profiles";
-	JsonObject *obj;
-	JsonArray *usernames_array;
-	
-	obj = json_object_new();
-	usernames_array = json_array_new();
-	
-	json_array_add_string_element(usernames_array, username);
-	json_object_set_array_member(obj, "usernames", usernames_array);
-	post = skypeweb_jsonobj_to_string(obj);
-	
-	skypeweb_post_or_get(sa, SKYPEWEB_METHOD_POST | SKYPEWEB_METHOD_SSL, SKYPEWEB_CONTACTS_HOST, url, post, skypeweb_got_info, g_strdup(username), TRUE);
-	
-	g_free(post);
-	json_object_unref(obj);
-}
-
 void
 skypeweb_get_friend_profile(SkypeWebAccount *sa, const gchar *who)
 {
@@ -1228,6 +1130,139 @@ skypeweb_get_friend_profile(SkypeWebAccount *sa, const gchar *who)
 	g_free(contacts);
 	g_free(whodup);
 }
+
+
+/*
+skypeweb_get_batch_profiles
+GET https://api.skype.com/users/batch/profiles
+
+Retrieves public info for any user, not just a contact.
+Private fields such as mood are always null. Avatars link to public versions.
+
+Usage: pass a callback to receive a populated SkypeWebProfileInfo.
+*/
+
+typedef void (*skypeweb_got_batch_profile)(SkypeWebAccount *sa, const gchar *username, const SkypeWebProfileInfo* profile);
+
+struct SkypeWebGetBatchProfileUserData {
+	gchar* username;
+	skypeweb_got_batch_profile* callback;
+};
+
+static void
+skypeweb_get_batch_profile_cb(SkypeWebAccount *sa, JsonNode *node, gpointer user_data)
+{
+	SkypeWebGetBatchProfileUserData *userData = user_data;
+	JsonObject *userobj;
+	PurpleBuddy *buddy;
+	SkypeWebBuddy *sbuddy;
+	SkypeWebProfileInfo profileInfo = {0}; //in case any non-covered fields are added
+	
+	if (node == NULL) {
+		g_free(userData->username);
+		g_free(userData);
+		return;
+	}
+	if (json_node_get_node_type(node) == JSON_NODE_ARRAY)
+		node = json_array_get_element(json_node_get_array(node), 0);
+	if (json_node_get_node_type(node) != JSON_NODE_OBJECT) {
+		g_free(userData->username);
+		g_free(userData);
+		return;
+	}
+	userobj = json_node_get_object(node);
+
+#define _SKYPEWEB_SET_INFO(MEMBER, PROP) \
+	if (PROP && json_object_has_member(userobj, (PROP)) && !json_object_get_null_member(userobj, (PROP))) \
+	  profileInfo.MEMBER = g_strdup(json_object_get_string_member(userobj, (PROP))); \
+	else profileInfo.MEMBER = NULL;
+
+	_SKYPEWEB_SET_INFO(firstname, "firstname");
+	_SKYPEWEB_SET_INFO(lastname, "lastname");
+	_SKYPEWEB_SET_INFO(birthday, "birthday");
+	_SKYPEWEB_SET_INFO(language, "language");
+	_SKYPEWEB_SET_INFO(country, "country");
+	_SKYPEWEB_SET_INFO(province, "province");
+	_SKYPEWEB_SET_INFO(city, "city");
+	_SKYPEWEB_SET_INFO(homepage, "homepage");
+	_SKYPEWEB_SET_INFO(about, "about");
+	_SKYPEWEB_SET_INFO(jobtitle, "jobtitle");
+	_SKYPEWEB_SET_INFO(phoneMobile, "phoneMobile");
+	_SKYPEWEB_SET_INFO(phoneHome, "phoneHome");
+	_SKYPEWEB_SET_INFO(phoneOffice, "phoneOffice");
+
+	//Gender needs special handling
+	if (json_object_has_member(userobj, "gender") && !json_object_get_null_member(userobj, "gender")) {
+		profileInfo.gender = 0;
+		
+		// Can be presented as either a string of a number or as a number argh
+		if (json_node_get_value_type(json_object_get_member(userobj, "gender")) == G_TYPE_STRING) {
+			const gchar *gender = json_object_get_string_member(userobj, "gender");
+			if (gender && *gender == '1') {
+				gender_output = 1
+			} else if (gender && *gender == '2') {
+				gender_output = 2;
+			}
+		} else {
+			gint64 gender = json_object_get_int_member(userobj, "gender");
+			if ((gender == 1) || (gender == 2))
+				profileInfo.gender = gender;
+		}
+	}
+	
+	//These are unavailable on public profiles and even if they are returned they'll always be NULL
+	//But we check them anyway to set the fields to NULL at least.
+	_SKYPEWEB_SET_INFO(mood, "mood");
+	_SKYPEWEB_SET_INFO(richMood, "richMood");
+	
+	//Avatar URL will point to public version for public profiles
+	_SKYPEWEB_SET_INFO(avatarUrl, "avatarUrl");
+
+	//Note: Do not look for this contact in our buddy list here.
+	//  This function is only for querying public info for external contacts.
+	
+	if (userData->callback)
+		userData->callback(sa, userData->username, &profileInfo);
+	
+	g_free(userData->username);
+	g_free(userData);
+}
+
+void
+skypeweb_get_batch_profile(SkypeWebAccount *sa, const gchar *username, skypeweb_got_batch_profile *callback)
+{
+	gchar *post;
+	const gchar *url = "/users/batch/profiles";
+
+	JsonObject *obj = json_object_new();
+	JsonArray *usernames_array = json_array_new();
+	
+	json_array_add_string_element(usernames_array, username);
+	json_object_set_array_member(obj, "usernames", usernames_array);
+	post = skypeweb_jsonobj_to_string(obj);
+	
+	SkypeWebGetBatchProfileUserData* userData = g_new(SkypeWebGetBatchProfileUserData, 1);
+	userData->username = g_strdup(username);
+	userData->callback = callback;
+	
+	skypeweb_post_or_get(sa, SKYPEWEB_METHOD_POST | SKYPEWEB_METHOD_SSL, SKYPEWEB_CONTACTS_HOST, url, post, skypeweb_get_batch_profile_cb, userData, TRUE);
+	
+	g_free(post);
+	json_object_unref(obj);
+}
+
+
+/*
+skypeweb_get_friend_list:
+GET https://contacts.skype.com/contacts/v2/users/[username]
+  Retrieves extensive information about all users in the current contact's friend list.
+  Returns etag and can return 304 not-modified if you pass etag back under IfNoneMatch header.
+
+GET https://contacts.skype.com/contacts/v2/users/[username]?delta&reason=default
+  Returns 200 when used with IfNoneMatch, otherwise the same.
+
+The only one of the contact queries currently that correctly returns non-public fields such as mood.
+*/
 
 static void
 skypeweb_get_friend_list_cb(SkypeWebAccount *sa, JsonNode *node, gpointer user_data)
@@ -1346,6 +1381,68 @@ skypeweb_get_friend_list(SkypeWebAccount *sa)
 	skypeweb_post_or_get(sa, SKYPEWEB_METHOD_GET | SKYPEWEB_METHOD_SSL, SKYPEWEB_NEW_CONTACTS_HOST, url, NULL, skypeweb_get_friend_list_cb, NULL, TRUE);
 }
 
+
+/*
+skypeweb_get_info
+
+Retrieves the latest info for the given username (from the contact list or not)
+and displays the user info dialog box via purple_notify_userinfo().
+*/
+void skypeweb_get_info_handle_profile(SkypeWebAccount* sa, const gchar* username, const SkypeWebProfileInfo* profile)
+{
+	//Receives profile information available for a given username and displays it via purple_notify_userinfo
+	PurpleNotifyUserInfo *user_info = purple_notify_user_info_new();
+
+#define _PURPLE_USER_INFO(MEMBER, KEY) if (profile->MEMBER) \
+	purple_notify_user_info_add_pair_html(user_info, _(KEY), profile->MEMBER);
+	
+	_PURPLE_USER_INFO(firstname, "First Name");
+	_PURPLE_USER_INFO(lastname, "Last Name");
+	_PURPLE_USER_INFO(birthday, "Birthday");
+	_PURPLE_USER_INFO(language, "Language");
+	_PURPLE_USER_INFO(country, "Country");
+	_PURPLE_USER_INFO(province, "Province");
+	_PURPLE_USER_INFO(city, "City");
+	_PURPLE_USER_INFO(homepage, "Homepage");
+	_PURPLE_USER_INFO(about, "About");
+	_PURPLE_USER_INFO(jobtitle, "Job Title");
+	_PURPLE_USER_INFO(phoneMobile, "Phone - Mobile");
+	_PURPLE_USER_INFO(phoneHome, "Phone - Home");
+	_PURPLE_USER_INFO(phoneOffice, "Phone - Office");
+	
+	//These will only be available for contacts from friend list
+	_PURPLE_USER_INFO(mood, "Mood");
+	_PURPLE_USER_INFO(richMood, "Mood");
+	
+	//These we cannot show:
+	//_PURPLE_USER_INFO("avatarUrl", "Avatar");
+	
+	//Gender needs special handling
+	const gchar *gender_output = _("Unknown");
+	switch(profileInfo.gender) {
+	case 1: gender_output = _("Male"); break;
+	case 2: gender_output = _("Female"); break;
+	}
+	purple_notify_user_info_add_pair_html(user_info, _("Gender"), gender_output);
+	
+	purple_notify_userinfo(sa->pc, username, user_info, NULL, NULL);
+}
+
+void
+skypeweb_get_info(PurpleConnection *pc, const gchar *username)
+{
+	SkypeWebAccount *sa = purple_connection_get_protocol_data(pc);
+	PurpleBuddy *buddy = purple_blist_find_buddy(sa->account, username);
+	SkypeWebBuddy *sbuddy = (buddy!=NULL) ? purple_buddy_get_protocol_data(buddy) : NULL;
+	if ((sbuddy != NULL) && sbuddy->authorized) {
+		//This contact must be in our friend list where we can get much more information.
+		//Update user information by requesting all the fields available.
+		skypeweb_get_friend_list(sa, /*info_only=*/true);
+	} else {
+		//This is not someone from our friend list so we can only query public info
+		skypeweb_get_batch_profile(sa, username, skypeweb_get_info_handle_profile);
+	}
+}
 
 
 void

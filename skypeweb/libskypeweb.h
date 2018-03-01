@@ -135,6 +135,7 @@
 
 typedef struct _SkypeWebAccount SkypeWebAccount;
 typedef struct _SkypeWebBuddy SkypeWebBuddy;
+typedef struct _SkypeWebProfileInfo SkypeWebProfileInfo;
 
 typedef void (*SkypeWebFunc)(SkypeWebAccount *swa);
 
@@ -165,6 +166,30 @@ struct _SkypeWebAccount {
 	gint vdms_expiry;
 };
 
+//All possible profile information fields.
+//Not all are available for non-buddies.
+struct _SkypeWebProfileInfo {
+	gchar* about;
+	gchar* birthday;
+	gchar* city;
+	gchar* country;
+	gchar* displayname;
+	gchar* emails;
+	gchar* firstname;
+	int gender;
+	gchar* homepage;
+	gchar* jobtitle;
+	gchar* language;
+	gchar* lastname;
+	gchar* phoneHome;
+	gchar* phoneMobile;
+	gchar* phoneOffice;
+	gchar* province;
+	gchar* mood;
+	gchar* richMood;
+	gchar* avatarUrl;
+}
+
 struct _SkypeWebBuddy {
 	SkypeWebAccount *sa;
 	PurpleBuddy *buddy;
@@ -179,6 +204,9 @@ struct _SkypeWebBuddy {
 	/** Profile info */
 	gchar *avatar_url;
 	gchar *mood;
+	
+	/** Enhanced profile info */
+	_SkypeWebProfileInfo info;
 };
 
 void skypeweb_buddy_free(PurpleBuddy *buddy);
