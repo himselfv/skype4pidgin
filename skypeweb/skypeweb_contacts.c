@@ -1199,9 +1199,9 @@ skypeweb_get_batch_profile_cb(SkypeWebAccount *sa, JsonNode *node, gpointer user
 		if (json_node_get_value_type(json_object_get_member(userobj, "gender")) == G_TYPE_STRING) {
 			const gchar *gender = json_object_get_string_member(userobj, "gender");
 			if (gender && *gender == '1') {
-				gender_output = 1
+				profileInfo.gender = 1
 			} else if (gender && *gender == '2') {
-				gender_output = 2;
+				profileInfo.gender = 2;
 			}
 		} else {
 			gint64 gender = json_object_get_int_member(userobj, "gender");
@@ -1255,6 +1255,36 @@ skypeweb_get_batch_profile(SkypeWebAccount *sa, const gchar *username, skypeweb_
 
 
 /*
+Service routines
+*/
+static inline void
+g_strupdate(gchar** str, gchar* newStr)
+{
+	if (*str)
+		g_free(*str);
+	*str = newStr;
+}
+
+//Safely updates a given string property with a value read from a JSON string property, or frees the value and replaces with NULL.
+//If no property is present it is assumed NULL
+static inline void
+skypeweb_prop_update(gchar** param, JsonObject* parent, const gchar* prop)
+{
+	if (parent && json_object_has_member(root, prop) && !json_object_get_null_member(parent, prop))
+		g_strupdate(param, g_strdup(json_object_get_string_member(parent, prop)));
+	else
+		g_strupdate(param, NULL);
+}
+
+//A simple overload for setting stuff to NULL
+static inline void
+skypeweb_prop_update(gchar** param, const char* value)
+{
+	g_strupdate(param, NULL);
+}
+
+
+/*
 skypeweb_get_friend_list():
 Queries or updates the friend list and user information for all friends. Called once at connection
 and then at any time that updating of the friend information is requested.
@@ -1272,13 +1302,6 @@ GET https://contacts.skype.com/contacts/v2/users/[username]?delta&reason=default
 
 The only one of the contact queries currently that correctly returns non-public fields such as mood.
 */
-static inline void
-g_strupdate(gchar** str, gchar* newStr)
-{
-	if (*str)
-		g_free(*str);
-	*str = newStr;
-}
 
 static void
 skypeweb_get_friend_list_cb(SkypeWebAccount *sa, JsonNode *node, gpointer user_data)
@@ -1303,20 +1326,21 @@ skypeweb_get_friend_list_cb(SkypeWebAccount *sa, JsonNode *node, gpointer user_d
 		const gchar *avatar_url = NULL;
 		gboolean authorized = json_object_get_boolean_member(contact, "authorized");
 		gboolean blocked = json_object_get_boolean_member(contact, "blocked");
-		
-		JsonObject *name = json_object_get_object_member(profile, "name");
-		const gchar *firstname = json_object_get_string_member(name, "first");
-		const gchar *surname = NULL;
-		
-		PurpleBuddy *buddy;
-		const gchar *id;
-		
+
 		if (json_object_has_member(contact, "suggested") && json_object_get_boolean_member(contact, "suggested") && !authorized) {
-			// suggested buddies wtf? some kind of advertising?
+			/*
+			If Skype recognizes anyone in your mobile phone contacts it'll suggest them in Skype afterwards
+			These are not authorized but have additional fields:
+			  "suggested":true,
+      		  "email_hashes":[
+        		"[hash text]="
+      		  ],
+      		*/
 			continue;
 		}
 		
-		id = skypeweb_strip_user_prefix(mri);
+		PurpleBuddy *buddy;
+		const gchar *id = skypeweb_strip_user_prefix(mri);
 		
 		buddy = purple_blist_find_buddy(sa->account, id);
 		if (!buddy)
@@ -1334,9 +1358,6 @@ skypeweb_get_friend_list_cb(SkypeWebAccount *sa, JsonNode *node, gpointer user_d
 			purple_blist_add_buddy(buddy, NULL, group, NULL);
 		}
 		
-		if (name && json_object_has_member(name, "surname"))
-			surname = json_object_get_string_member(name, "surname");
-
 
 		SkypeWebBuddy *sbuddy = purple_buddy_get_protocol_data(buddy);
 		bool sbuddy_new = !sbuddy;
@@ -1348,27 +1369,136 @@ skypeweb_get_friend_list_cb(SkypeWebAccount *sa, JsonNode *node, gpointer user_d
 			//Otherwise don't change these fields: we've located the buddy by them so they must still match.
 		}
 
-#define _SKYPEWEB_SET_INFO(MEMBER, PROP) \
-	if (PROP && json_object_has_member(userobj, (PROP)) && !json_object_get_null_member(userobj, (PROP))) \
-	  profileInfo.MEMBER = g_strdup(json_object_get_string_member(userobj, (PROP))); \
-	else profileInfo.MEMBER = NULL;
 
+		/*
+		Populate or update profile fields.
+		Contrary to other requests, /contacts/v2/users/SELF returns only non-null profile fields,
+		so any missing fields should be assumed null.
+		*/
+		
+		/*
+		Name block.
+	    Note that the displayname here is the one set by the user themselves, while the display_name
+	    one level higher is user-adjustable.
+		*/
+		JsonObject *name = json_object_get_object_member(profile, "name");
+		if (name) {
+			skypeweb_prop_update(&sbuddy->info.firstname, name, "first");
+			skypeweb_prop_update(&sbuddy->info.lastname, name, "surname"); //sic
+			skypeweb_prop_update(&sbuddy->info.displayname, name, "nickname"); //sic
+		}
+		//Okay, if the contact has no own displayname, use the one provided by the user
+		if (!sbuddy->info.displayname && display_name)
+			g_strupdate(&sbuddy->info.displayname, g_strdup(display_name));
 
-		g_strupdate(&sbuddy->fullname, g_strconcat(firstname, (surname ? " " : NULL), surname, NULL));
+		//Simple fields
+		skypeweb_prop_update(&sbuddy->info.avatarUrl, profile, "avatarUrl");
+		skypeweb_prop_update(&sbuddy->info.mood, profile, "mood");
+		skypeweb_prop_update(&sbuddy->info.richMood, NULL); //Haven't seen richMood returned in the wild with this request, so NULL it for now
+		skypeweb_prop_update(&sbuddy->info.birthday, profile, "birthday");
+		skypeweb_prop_update(&sbuddy->info.about, profile, "about");
+		skypeweb_prop_update(&sbuddy->info.language, profile, "language");
+		skypeweb_prop_update(&sbuddy->info.homepage, profile, "website"); //sic
+		skypeweb_prop_update(&sbuddy->info.jobtitle, NULL); //Haven't seen return in the wild yet.
+		
+		/*
+		Locations list.
+		This request returns multiple locations, but at most 1 has been spotted in the wild and only of "type": "home".
+		So we're just going to assume the first location is the one.
+		*/
+		JsonArray *locations = json_object_get_array_member(profile, "locations");
+		JsonObject* location = NULL;
+		if (locations && (json_array_get_length(locations)>0))
+			location = json_array_get_object_element(locations, i);
+		if (location) {
+			//There's also "type" but we don't care about it ATM
+			skypeweb_prop_update(&sbuddy->info.country, location, "country");
+			skypeweb_prop_update(&sbuddy->info.city, location, "city");
+			skypeweb_prop_update(&sbuddy->info.province, location, "state"); //sic
+		} else {
+			//Null the location
+			skypeweb_prop_update(&sbuddy->info.country, NULL);
+			skypeweb_prop_update(&sbuddy->info.city, NULL);
+			skypeweb_prop_update(&sbuddy->info.province, NULL);
+		}
+		
+		/*
+		Phone list
+		An array of phone entries, each can have "type":"mobile"/"office"/"home" (all spotted in the wild).
+		*/
+		//Null all phones then fill the ones present
+		skypeweb_prop_update(&sbuddy->info.phoneMobile, NULL);
+		skypeweb_prop_update(&sbuddy->info.phoneHome, NULL);
+		skypeweb_prop_update(&sbuddy->info.phoneOffice, NULL);
+		
+		JsonArray *phones = json_object_get_array_member(profile, "phones");
+		if (phones) {
+			int len = json_array_get_length(phones);
+			for (int i=0; i<len; i++) {
+				JsonObject *phone = json_array_get_object_element(phones, i);
+				if (!phone || !json_object_has_member(phone, "type")
+						   || !json_object_get_null_member(phone, "type")) continue;
+				g_str phone_type = json_object_get_string_member(phone, "type");
+				
+				//Determine type and select the correct field to store it
+				gstr **prop = NULL;
+				if (g_ascii_strncasecmp(phone_type, "mobile", 7))
+					prop = &sbuddy->info.phoneMobile;
+				else if (g_ascii_strncasecmp(phone_type, "home", 5))
+					prop = &sbuddy->info.phoneHome;
+				else if (g_ascii_strncasecmp(phone_type, "office", 7))
+					prop = &sbuddy->info.phoneOffice;
+				if (!prop) continue; //unknown type
+				
+				//Get the number
+				if ( !json_object_has_member(phone, "number")
+			       || json_object_get_null_member(phone, "number")) continue
+				gchar* number = json_object_get_string_member(phone, "number");
+				
+				skypeweb_prop_update(prop, number);
+			}
+		};
+		
+		//Gender
+		//Copying the logic from /batch
+		sbuddy->info.gender = 0; // unknown
+		if (json_object_has_member(profile, "gender") && json_object_get_null_member(profile, "gender")) {
+			// Can be presented as either a string of a number or as a number argh
+			if (json_node_get_value_type(json_object_get_member(userobj, "gender")) == G_TYPE_STRING) {
+				const gchar *gender = json_object_get_string_member(userobj, "gender");
+				if (gender && *gender == '1') {
+					sbuddy->info.gender = 1
+				} else if (gender && *gender == '2') {
+					sbuddy->info.gender = 2;
+				}
+			} else {
+				gint64 gender = json_object_get_int_member(userobj, "gender");
+				if ((gender == 1) || (gender == 2))
+					sbuddy->info.gender = gender;
+			}
+		}
+
+		
+		/*
+		Populate some fields outside of info.
+		*/
+		g_strupdate(&sbuddy->fullname, g_strconcat(
+			(sbuddy->info.firstname ? "" : NULL),
+			((sbuddy->info.firstname && sbuddy->info.lastname) ? " " : NULL),
+			(sbuddy->info.lastname ? "" : NULL),
+			NULL));
 		g_strupdate(&sbuddy->display_name, g_strdup(display_name));
 		g_strupdate(&sbuddy->avatar_url, g_strdup(purple_buddy_icons_get_checksum_for_user(buddy)));
-		
-		const gchar *mood = json_object_get_string_member(profile, "mood");
-		g_strupdate(&sbuddy->mood, g_strdup(mood));
+		g_strupdate(&sbuddy->mood, g_strdup(sbuddy->info.mood));
 
 		sbuddy->authorized = authorized;
 		sbuddy->blocked = blocked;
 		
+		//If we've just created the contact additional data, store it
 		if (sbuddy_new) {
 			sbuddy->buddy = buddy;
 			purple_buddy_set_protocol_data(buddy, sbuddy);
 		}
-		
 		
 		if (!purple_strequal(purple_buddy_get_local_alias(buddy), sbuddy->display_name)) {
 			purple_serv_got_alias(sa->pc, id, sbuddy->display_name);
