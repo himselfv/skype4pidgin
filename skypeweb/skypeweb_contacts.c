@@ -1297,13 +1297,13 @@ skypeweb_get_friend_list_cb(SkypeWebAccount *sa, JsonNode *node, gpointer user_d
 	{
 		JsonObject *contact = json_array_get_object_element(contacts, index);
 		JsonObject *profile = json_object_get_object_member(contact, "profile");
+		
 		const gchar *mri = json_object_get_string_member(contact, "mri");
 		const gchar *display_name = json_object_get_string_member(contact, "display_name");
 		const gchar *avatar_url = NULL;
 		gboolean authorized = json_object_get_boolean_member(contact, "authorized");
 		gboolean blocked = json_object_get_boolean_member(contact, "blocked");
 		
-		const gchar *mood = json_object_get_string_member(profile, "mood");
 		JsonObject *name = json_object_get_object_member(profile, "name");
 		const gchar *firstname = json_object_get_string_member(name, "first");
 		const gchar *surname = NULL;
@@ -1357,7 +1357,10 @@ skypeweb_get_friend_list_cb(SkypeWebAccount *sa, JsonNode *node, gpointer user_d
 		g_strupdate(&sbuddy->fullname, g_strconcat(firstname, (surname ? " " : NULL), surname, NULL));
 		g_strupdate(&sbuddy->display_name, g_strdup(display_name));
 		g_strupdate(&sbuddy->avatar_url, g_strdup(purple_buddy_icons_get_checksum_for_user(buddy)));
+		
+		const gchar *mood = json_object_get_string_member(profile, "mood");
 		g_strupdate(&sbuddy->mood, g_strdup(mood));
+
 		sbuddy->authorized = authorized;
 		sbuddy->blocked = blocked;
 		
