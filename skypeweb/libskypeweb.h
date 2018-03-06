@@ -188,7 +188,7 @@ struct _SkypeWebProfileInfo {
 	gchar* mood;
 	gchar* richMood;
 	gchar* avatarUrl;
-}
+};
 
 struct _SkypeWebBuddy {
 	SkypeWebAccount *sa;
@@ -206,7 +206,7 @@ struct _SkypeWebBuddy {
 	gchar *mood;
 	
 	/** Enhanced profile info */
-	_SkypeWebProfileInfo info;
+	SkypeWebProfileInfo info;
 };
 
 void skypeweb_buddy_free(PurpleBuddy *buddy);
