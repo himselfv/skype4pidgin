@@ -350,8 +350,10 @@ skypeweb_login(PurpleAccount *account)
 	sa->conns = purple_http_connection_set_new();
 
 	if (purple_account_get_bool(account, "alt-login", FALSE)) {
+		INFO("Using alternative login method\n");
 		skypeweb_begin_soapy_login(sa);
 	} else {
+		INFO("Using normal login method\n");
 		if (purple_account_get_string(account, "refresh-token", NULL) && purple_account_get_remember_password(account)) {
 			skypeweb_refresh_token_login(sa);
 		} else {
