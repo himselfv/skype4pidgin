@@ -35,6 +35,10 @@ skypeweb_post_or_get_cb(PurpleHttpConnection *http_conn, PurpleHttpResponse *res
 	gsize len;
 	
 	data = purple_http_response_get_data(response, &len);
+	purple_debug_info("skypeweb", "Response raw data: \n%s\n", data);
+	
+	const gchar* error = purple_http_response_get_error(response);
+	purple_debug_info("skypeweb", "Response error text: %s\n", error);
 	
 	if (conn->callback != NULL) {
 		if (!len)
@@ -78,14 +82,18 @@ SkypeWebConnection *skypeweb_post_or_get(SkypeWebAccount *sa, SkypeWebMethod met
 	g_return_val_if_fail(url != NULL, NULL);
 	
 	real_url = g_strdup_printf("%s://%s%s", method & SKYPEWEB_METHOD_SSL ? "https" : "http", host, url);
+	purple_debug_info("skypeweb", "skypeweb_post_or_get(): url=%s\n", real_url);
 	
 	request = purple_http_request_new(real_url);
 	if (method & SKYPEWEB_METHOD_POST) {
 		purple_http_request_set_method(request, "POST");
+		purple_debug_info("skypeweb", "Method: POST\n");
 	} else if (method & SKYPEWEB_METHOD_PUT) {
 		purple_http_request_set_method(request, "PUT");
+		purple_debug_info("skypeweb", "Method: PUT\n");
 	} else if (method & SKYPEWEB_METHOD_DELETE) {
 		purple_http_request_set_method(request, "DELETE");
+		purple_debug_info("skypeweb", "Method: DELETE\n");
 	}
 	if (keepalive) {
 		purple_http_request_set_keepalive_pool(request, sa->keepalive_pool);
@@ -93,27 +101,35 @@ SkypeWebConnection *skypeweb_post_or_get(SkypeWebAccount *sa, SkypeWebMethod met
 	
 	purple_http_request_set_max_redirects(request, 0);
 	purple_http_request_set_timeout(request, 120);
+	purple_debug_info("skypeweb", "max_redirects=0\n");
+	purple_debug_info("skypeweb", "timeout=120\n");
 	
 	if (method & (SKYPEWEB_METHOD_POST | SKYPEWEB_METHOD_PUT)) {
 		if (postdata && (postdata[0] == '[' || postdata[0] == '{')) {
 			purple_http_request_header_set(request, "Content-Type", "application/json"); // hax
+			purple_debug_info("skypeweb", "Content-Type: application/json\n");
 		} else {
 			purple_http_request_header_set(request, "Content-Type", "application/x-www-form-urlencoded");
+			purple_debug_info("skypeweb", "Content-Type: application/x-www-form-urlencoded\n");
 		}
 		purple_http_request_set_contents(request, postdata, -1);
 		
 		//Zero-length PUT's dont get the content-length header set
 		if ((method & SKYPEWEB_METHOD_PUT) && (!postdata || !*postdata)) {
 			purple_http_request_header_set(request, "Content-Length", "0");
+			purple_debug_info("skypeweb", "Content-Length: 0\n");
 		}
 	}
 	
 	if (g_str_equal(host, SKYPEWEB_CONTACTS_HOST) || g_str_equal(host, SKYPEWEB_VIDEOMAIL_HOST) || g_str_equal(host, SKYPEWEB_NEW_CONTACTS_HOST)) {
 		purple_http_request_header_set(request, "X-Skypetoken", sa->skype_token);
-		purple_http_request_header_set(request, "X-Stratus-Caller", SKYPEWEB_CLIENTINFO_NAME);
-		purple_http_request_header_set(request, "X-Stratus-Request", "abcd1234");
+		purple_debug_info("skypeweb", "X-Skypetoken: %s\n", sa->skype_token);
+		purple_http_request_header_set(request, "X-Skype-Caller", "skype.com");
+		purple_debug_info("skypeweb", "X-Skype-Caller: skype.com\n");
+		purple_http_request_header_set(request, "X-Skype-Request-Id", "89c53e2f");
+		purple_debug_info("skypeweb", "X-Skype-Request-Id: %s\n", "89c53e2f");
 		purple_http_request_header_set(request, "Origin", "https://web.skype.com");
-		purple_http_request_header_set(request, "Referer", "https://web.skype.com/main");
+		purple_http_request_header_set(request, "Referer", "https://web.skype.com/en/");
 		purple_http_request_header_set(request, "Accept", "application/json; ver=1.0;");
 	} else if (g_str_equal(host, SKYPEWEB_GRAPH_HOST)) {
 		purple_http_request_header_set(request, "X-Skypetoken", sa->skype_token);
@@ -139,6 +155,7 @@ SkypeWebConnection *skypeweb_post_or_get(SkypeWebAccount *sa, SkypeWebMethod met
 	language_names = g_strjoinv(", ", (gchar **)languages);
 	purple_util_chrreplace(language_names, '_', '-');
 	purple_http_request_header_set(request, "Accept-Language", language_names);
+	purple_debug_info("skypeweb", "Accept-Language: %s\n", language_names);
 	g_free(language_names);
 	
 	conn = g_new0(SkypeWebConnection, 1);
