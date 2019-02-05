@@ -74,6 +74,7 @@ static guint active_icon_downloads = 0;
 static void
 skypeweb_get_icon_cb(PurpleHttpConnection *http_conn, PurpleHttpResponse *response, gpointer user_data)
 {
+	DEBUG("skypeweb_get_icon_cb(): in\n");
 	PurpleHttpRequest *request = purple_http_conn_get_request(http_conn);
 	PurpleBuddy *buddy = user_data;
 	const gchar *url = purple_http_request_get_url(request);
@@ -93,12 +94,13 @@ skypeweb_get_icon_cb(PurpleHttpConnection *http_conn, PurpleHttpResponse *respon
 	}
 	
 	purple_buddy_icons_set_for_user(purple_buddy_get_account(buddy), purple_buddy_get_name(buddy), g_memdup(data, len), len, url);
-	
+	DEBUG("skypeweb_get_icon_cb(): out\n");
 }
 
 static void
 skypeweb_get_icon_now(PurpleBuddy *buddy)
 {
+	DEBUG("skypeweb_get_icon_now(): in\n");
 	SkypeWebBuddy *sbuddy;
 	SkypeWebAccount *sa;
 	gchar *url;
@@ -122,11 +124,13 @@ skypeweb_get_icon_now(PurpleBuddy *buddy)
 	g_free(url);
 
 	active_icon_downloads++;
+	DEBUG("skypeweb_get_icon_now(): out\n");
 }
 
 static gboolean
 skypeweb_get_icon_queuepop(gpointer data)
 {
+	DEBUG("skypeweb_get_icon_queuepop(): in\n");
 	PurpleBuddy *buddy = data;
 	
 	// Only allow 4 simultaneous downloads
@@ -134,6 +138,7 @@ skypeweb_get_icon_queuepop(gpointer data)
 		return TRUE;
 	
 	skypeweb_get_icon_now(buddy);
+	DEBUG("skypeweb_get_icon_queuepop(): out\n");
 	return FALSE;
 }
 
@@ -1152,10 +1157,14 @@ skypeweb_got_friend_profiles(SkypeWebAccount *sa, JsonNode *node, gpointer user_
 			purple_buddy_set_server_alias(buddy, json_object_get_string_member(contact, "firstname"));
 		}
 		
+
+		DEBUG("got_friend_profiles(): old_avatar='%s'\n", sbuddy->avatar_url);
 		new_avatar = json_object_get_string_member(contact, "avatarUrl");
+		DEBUG("got_friend_profiles(): new_avatar='%s'\n", new_avatar);
 		if (new_avatar && *new_avatar && (!sbuddy->avatar_url || !g_str_equal(sbuddy->avatar_url, new_avatar))) {
+			DEBUG("got_friend_profiles(): replacing avatar...\n");
 			g_free(sbuddy->avatar_url);
-			sbuddy->avatar_url = g_strdup(new_avatar);			
+			sbuddy->avatar_url = g_strdup(new_avatar);
 			skypeweb_get_icon(buddy);
 		}
 		
@@ -1316,6 +1325,8 @@ skypeweb_get_friend_list_cb(SkypeWebAccount *sa, JsonNode *node, gpointer user_d
 	GSList *users_to_fetch = NULL;
 	guint index, length;
 	
+	DEBUG("get_friend_list_cb(): in\n");
+	
 	obj = json_node_get_object(node);
 	contacts = json_object_get_array_member(obj, "contacts");
 	length = json_array_get_length(contacts);
@@ -1377,6 +1388,8 @@ skypeweb_get_friend_list_cb(SkypeWebAccount *sa, JsonNode *node, gpointer user_d
 		sbuddy->avatar_url = g_strdup(purple_buddy_icons_get_checksum_for_user(buddy));
 		sbuddy->mood = g_strdup(mood);
 		
+		DEBUG("existing avatar_url='%s'\n", sbuddy->avatar_url);
+		
 		sbuddy->buddy = buddy;
 		purple_buddy_set_protocol_data(buddy, sbuddy);
 		
@@ -1389,7 +1402,9 @@ skypeweb_get_friend_list_cb(SkypeWebAccount *sa, JsonNode *node, gpointer user_d
 		
 		if (json_object_has_member(profile, "avatar_url")) {
 			avatar_url = json_object_get_string_member(profile, "avatar_url");
+			DEBUG("new_avatar='%s'\n", avatar_url);
 			if (avatar_url && *avatar_url && (!sbuddy->avatar_url || !g_str_equal(sbuddy->avatar_url, avatar_url))) {
+				DEBUG("get_friend_list_cb(): replacing avatar...\n");
 				g_free(sbuddy->avatar_url);
 				sbuddy->avatar_url = g_strdup(avatar_url);			
 				skypeweb_get_icon(buddy);
@@ -1414,6 +1429,7 @@ skypeweb_get_friend_list_cb(SkypeWebAccount *sa, JsonNode *node, gpointer user_d
 		skypeweb_subscribe_to_contact_status(sa, users_to_fetch);
 		g_slist_free(users_to_fetch);
 	}
+	DEBUG("get_friend_list_cb(): out\n");
 }
 
 void
@@ -1441,6 +1457,7 @@ skypeweb_auth_accept_cb(
 	
 	sa = purple_connection_get_protocol_data(purple_account_get_connection(purple_buddy_get_account(buddy)));
 	buddy_name = g_strdup(purple_buddy_get_name(buddy));
+	DEBUG("auth_accept_cb(): buddy_name=%s\n", buddy_name);
 	
 	url = g_strdup_printf("/contacts/v2/users/SELF/invites/%s%s/accept", skypeweb_user_url_prefix(buddy_name), purple_url_encode(buddy_name));
 	skypeweb_post_or_get(sa, SKYPEWEB_METHOD_PUT | SKYPEWEB_METHOD_SSL, SKYPEWEB_NEW_CONTACTS_HOST, url, NULL, NULL, NULL, TRUE);
@@ -1451,6 +1468,7 @@ skypeweb_auth_accept_cb(
 	skypeweb_subscribe_to_contact_status(sa, users_to_fetch);
 	g_slist_free(users_to_fetch);
 	g_free(buddy_name);
+	DEBUG("auth_accept_cb(): out\n");
 }
 
 void
@@ -1467,6 +1485,7 @@ skypeweb_auth_reject_cb(
 	
 	sa = purple_connection_get_protocol_data(purple_account_get_connection(purple_buddy_get_account(buddy)));
 	buddy_name = g_strdup(purple_buddy_get_name(buddy));
+	DEBUG("auth_reject_cb(): buddy_name=%s\n", buddy_name);
 	
 	url = g_strdup_printf("/contacts/v2/users/SELF/invites/%s%s/decline", skypeweb_user_url_prefix(buddy_name), purple_url_encode(buddy_name));
 	
@@ -1483,10 +1502,12 @@ skypeweb_got_authrequests(SkypeWebAccount *sa, JsonNode *node, gpointer user_dat
 	JsonArray *invite_list;
 	guint index, length;
 	time_t latest_timestamp = 0;
+	DEBUG("got_authrequests()\n");
 	
 	requests = json_node_get_object(node);
 	invite_list = json_object_get_array_member(requests, "invite_list");
 	length = json_array_get_length(invite_list);
+	DEBUG("got_authrequests(): %d requests\n", length);
 	for(index = 0; index < length; index++)
 	{
 		JsonObject *invite = json_array_get_object_element(invite_list, index);
@@ -1499,6 +1520,7 @@ skypeweb_got_authrequests(SkypeWebAccount *sa, JsonNode *node, gpointer user_dat
 			greeting = json_object_get_string_member(json_array_get_object_element(invites, 0), "message");
 		const gchar *displayname = json_object_get_string_member(invite, "displayname");
 		
+		DEBUG("got_authrequests(): `%s` requests authorization\n", displayname);
 		latest_timestamp = MAX(latest_timestamp, event_timestamp);
 		if (sa->last_authrequest && event_timestamp <= sa->last_authrequest)
 			continue;
@@ -1506,6 +1528,7 @@ skypeweb_got_authrequests(SkypeWebAccount *sa, JsonNode *node, gpointer user_dat
 		if (sender == NULL)
 			continue;
 		sender = skypeweb_strip_user_prefix(sender);
+		DEBUG("got_authrequests(): will ask for authorization\n");
 		
 		purple_account_request_authorization(
 				sa->account, sender, NULL,

@@ -18,6 +18,11 @@
 
 #include "libskypeweb.h"
 
+#define DEBUG(msg, ...) purple_debug_misc("skypeweb", msg, ##__VA_ARGS__)
+#define INFO(msg, ...) purple_debug_info("skypeweb", msg, ##__VA_ARGS__)
+#define WARN(msg, ...) purple_debug_warn("skypeweb", msg, ##__VA_ARGS__)
+
+
 gchar *skypeweb_string_get_chunk(const gchar *haystack, gsize len, const gchar *start, const gchar *end);
 
 gchar *skypeweb_jsonobj_to_string(JsonObject *jsonobj);
